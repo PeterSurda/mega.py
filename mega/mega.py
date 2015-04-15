@@ -11,6 +11,7 @@ import shutil
 from .errors import ValidationError, RequestError
 from .crypto import *
 import tempfile
+import pprint
 
 
 class Mega(object):
@@ -199,41 +200,13 @@ class Mega(object):
 
     ##########################################################################
     # GET
-    
-    def find_path_descriptor(self, path):
-        """
-        Find descriptor of folder inside a path. i.e.: folder1/folder2/folder3
-        Params:
-            path, string like folder1/folder2/folder3
-        Return:
-            Descriptor (str) of folder3 if exists, None otherwise
-        """
-        paths = path.split('/')
-
-        files = self.get_files()
-        parent_desc = self.root_id
-        found = False
-        for foldername in paths:
-            if foldername != '':
-                for file in files.iteritems():
-                    if file[1]['a'] and file[1]['t'] and \
-                            file[1]['a']['n'] == foldername:
-                        if parent_desc == file[1]['p']:
-                            parent_desc = file[0]
-                            found = True
-                if found:
-                    found = False
-                else:
-                    return None
-        return parent_desc
-    
     def find(self, filename):
         """
         Return file object from given filename
         """
         files = self.get_files()
         for file in files.items():
-            if file[1]['a'] and file[1]['a']['n'] == filename:
+            if file[1]['a'] and isinstance(file[1]['a'], (dict)) and file[1]['a']['n'] == filename:
                 return file
 
     def get_files(self):
@@ -245,8 +218,11 @@ class Mega(object):
         shared_keys = {}
         self._init_shared_keys(files, shared_keys)
         for file in files['f']:
-            processed_file = self._process_file(file, shared_keys)
+            try:
+                processed_file = self._process_file(file, shared_keys)
             #ensure each file has a name before returning
+            except:
+                processed_file['a'] = False
             if processed_file['a']:
                 files_dict[file['h']] = processed_file
         return files_dict
@@ -259,9 +235,12 @@ class Mega(object):
         if 'f' in file:
             file = file['f'][0]
             public_handle = self._api_request({'a': 'l', 'n': file['h']})
-            file_key = file['k'][file['k'].index(':') + 1:]
-            decrypted_key = a32_to_base64(decrypt_key(base64_to_a32(file_key),
-                                                      self.master_key))
+            if file['rawkey']:
+                decrypted_key = file['rawkey']
+            else:
+                file_key = file['k'][file['k'].index(':') + 1:]
+                decrypted_key = a32_to_base64(decrypt_key(base64_to_a32(file_key),
+                                                          self.master_key))
             return '{0}://{1}/#!{2}!{3}'.format(self.schema,
                                                 self.domain,
                                                 public_handle,
@@ -534,7 +513,7 @@ class Mega(object):
 
     ##########################################################################
     # UPLOAD
-    def upload(self, filename, dest=None, dest_filename=None):
+    def upload(self, filename, dest=None, dest_filename=None, save_key=True):
         #determine storage node
         if dest is None:
             #if none set, upload to cloud drive node
@@ -559,41 +538,37 @@ class Mega(object):
         mac_str = '\0' * 16
         mac_encryptor = AES.new(k_str, AES.MODE_CBC, mac_str)
         iv_str = a32_to_str([ul_key[4], ul_key[5], ul_key[4], ul_key[5]])
-        if file_size > 0:
-            for chunk_start, chunk_size in get_chunks(file_size):
-                chunk = input_file.read(chunk_size)
-                upload_progress += len(chunk)
 
-                encryptor = AES.new(k_str, AES.MODE_CBC, iv_str)
-                for i in range(0, len(chunk)-16, 16):
-                    block = chunk[i:i + 16]
-                    encryptor.encrypt(block)
+        for chunk_start, chunk_size in get_chunks(file_size):
+            chunk = input_file.read(chunk_size)
+            upload_progress += len(chunk)
 
-                #fix for files under 16 bytes failing
-                if file_size > 16:
-                    i += 16
-                else:
-                    i = 0
-
+            encryptor = AES.new(k_str, AES.MODE_CBC, iv_str)
+            for i in range(0, len(chunk)-16, 16):
                 block = chunk[i:i + 16]
-                if len(block) % 16:
-                    block += '\0' * (16 - len(block) % 16)
-                mac_str = mac_encryptor.encrypt(encryptor.encrypt(block))
+                encryptor.encrypt(block)
 
-                #encrypt file and upload
-                chunk = aes.encrypt(chunk)
-                output_file = requests.post(ul_url + "/" + str(chunk_start),
-                                            data=chunk, timeout=self.timeout)
-                completion_file_handle = output_file.text
+            #fix for files under 16 bytes failing
+            if file_size > 16:
+                i += 16
+            else:
+                i = 0
 
-                if self.options.get('verbose') is True:
-                    # upload progress
-                    print('{0} of {1} uploaded'.format(upload_progress, file_size))
-        else:
-            output_file = requests.post(ul_url + "/0",
-                                            data='', timeout=self.timeout)
+            block = chunk[i:i + 16]
+            if len(block) % 16:
+                block += '\0' * (16 - len(block) % 16)
+            mac_str = mac_encryptor.encrypt(encryptor.encrypt(block))
+
+            #encrypt file and upload
+            chunk = aes.encrypt(chunk)
+            output_file = requests.post(ul_url + "/" + str(chunk_start),
+                                        data=chunk, timeout=self.timeout)
             completion_file_handle = output_file.text
-            
+
+            if self.options.get('verbose') is True:
+                # upload progress
+                print('{0} of {1} uploaded'.format(upload_progress, file_size))
+
         file_mac = str_to_a32(mac_str)
 
         #determine meta mac
@@ -604,11 +579,21 @@ class Mega(object):
         else:
             attribs = {'n': os.path.basename(filename)}
 
+#	if not save_key:
+#            old_ul_key = ul_key
+#    	    ul_key = [random.randint(0, 0xFFFFFFFF) for _ in range(6)]
+
         encrypt_attribs = base64_url_encode(encrypt_attr(attribs, ul_key[:4]))
+
         key = [ul_key[0] ^ ul_key[4], ul_key[1] ^ ul_key[5],
                ul_key[2] ^ meta_mac[0], ul_key[3] ^ meta_mac[1],
                ul_key[4], ul_key[5], meta_mac[0], meta_mac[1]]
+
         encrypted_key = a32_to_base64(encrypt_key(key, self.master_key))
+
+        if not save_key:
+            encrypted_key = a32_to_base64([0, 0, 0, 0, 0, 0])
+
         #update attributes
         data = self._api_request({'a': 'p', 't': dest, 'n': [{
                                  'h': completion_file_handle,
@@ -617,6 +602,8 @@ class Mega(object):
                                  'k': encrypted_key}]})
         #close input file and return API msg
         input_file.close()
+        if not save_key:
+            data['f'][0]['rawkey'] = a32_to_base64(key)
         return data
 
     ##########################################################################
