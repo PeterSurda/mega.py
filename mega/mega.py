@@ -512,7 +512,7 @@ class Mega(object):
 
     ##########################################################################
     # UPLOAD
-    def upload(self, filename, dest=None, dest_filename=None, save_key=True):
+    def upload(self, blob, dest=None, dest_filename=None, save_key=True):
         #determine storage node
         if dest is None:
             #if none set, upload to cloud drive node
@@ -521,8 +521,7 @@ class Mega(object):
             dest = self.root_id
 
         #request upload url, call 'u' method
-        input_file = open(filename, 'rb')
-        file_size = os.path.getsize(filename)
+        file_size = blob.len()
         ul_url = self._api_request({'a': 'u', 's': file_size})['p']
 
         #generate random aes key (128) for file
@@ -539,7 +538,7 @@ class Mega(object):
         iv_str = a32_to_str([ul_key[4], ul_key[5], ul_key[4], ul_key[5]])
 
         for chunk_start, chunk_size in get_chunks(file_size):
-            chunk = input_file.read(chunk_size)
+            chunk = blob[chunk_start, chunk_start + chunk_size]
             upload_progress += len(chunk)
 
             encryptor = AES.new(k_str, AES.MODE_CBC, iv_str)
@@ -573,10 +572,7 @@ class Mega(object):
         #determine meta mac
         meta_mac = (file_mac[0] ^ file_mac[1], file_mac[2] ^ file_mac[3])
 
-        if dest_filename is not None:
-            attribs = {'n': dest_filename}
-        else:
-            attribs = {'n': os.path.basename(filename)}
+        attribs = {'n': dest_filename}
 
         encrypt_attribs = base64_url_encode(encrypt_attr(attribs, ul_key[:4]))
         key = [ul_key[0] ^ ul_key[4], ul_key[1] ^ ul_key[5],
@@ -592,7 +588,6 @@ class Mega(object):
                                  'a': encrypt_attribs,
                                  'k': encrypted_key}]})
         #close input file and return API msg
-        input_file.close()
         if not save_key:
             data['f'][0]['rawkey'] = a32_to_base64(key)
         return data
