@@ -11,7 +11,6 @@ import shutil
 from .errors import ValidationError, RequestError
 from .crypto import *
 import tempfile
-import pprint
 
 
 class Mega(object):
@@ -579,21 +578,13 @@ class Mega(object):
         else:
             attribs = {'n': os.path.basename(filename)}
 
-#	if not save_key:
-#            old_ul_key = ul_key
-#    	    ul_key = [random.randint(0, 0xFFFFFFFF) for _ in range(6)]
-
         encrypt_attribs = base64_url_encode(encrypt_attr(attribs, ul_key[:4]))
-
         key = [ul_key[0] ^ ul_key[4], ul_key[1] ^ ul_key[5],
                ul_key[2] ^ meta_mac[0], ul_key[3] ^ meta_mac[1],
                ul_key[4], ul_key[5], meta_mac[0], meta_mac[1]]
-
         encrypted_key = a32_to_base64(encrypt_key(key, self.master_key))
-
         if not save_key:
             encrypted_key = a32_to_base64([0, 0, 0, 0, 0, 0])
-
         #update attributes
         data = self._api_request({'a': 'p', 't': dest, 'n': [{
                                  'h': completion_file_handle,
