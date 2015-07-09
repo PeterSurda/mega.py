@@ -521,7 +521,7 @@ class Mega(object):
             dest = self.root_id
 
         #request upload url, call 'u' method
-        file_size = blob.len()
+        file_size = len(blob)
         ul_url = self._api_request({'a': 'u', 's': file_size})['p']
 
         #generate random aes key (128) for file
@@ -538,7 +538,7 @@ class Mega(object):
         iv_str = a32_to_str([ul_key[4], ul_key[5], ul_key[4], ul_key[5]])
 
         for chunk_start, chunk_size in get_chunks(file_size):
-            chunk = blob[chunk_start, chunk_start + chunk_size]
+            chunk = blob[chunk_start: chunk_start + chunk_size]
             upload_progress += len(chunk)
 
             encryptor = AES.new(k_str, AES.MODE_CBC, iv_str)
